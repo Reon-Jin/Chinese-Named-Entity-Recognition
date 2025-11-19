@@ -13,15 +13,15 @@ import gc
 def get_args():
     """创建并返回参数字典，模拟命令行参数"""
     args = {
-        'train': True,  # 设置为True表示训练模式
-        'test': False,  # 设置为False
+        'train': False,  # 设置为True表示训练模式
+        'test': True,  # 设置为False
         'TRAIN': './data/NER-train-utf8.txt',  # 训练数据路径
         'TEST': './data/NER-test-utf8.txt',  # 测试数据路径
         'RESULT': './result.txt',  # 结果保存路径
         'SENT_VOCAB': './vocab/sent_vocab.json',  # 句子词典路径
         'TAG_VOCAB': './vocab/tag_vocab.json',  # 标签词典路径
-        'MODEL': './trained_model/model.pth',  # 模型路径
-        '--dropout-rate': '0.5',
+        'MODEL': './trained_model/BiLSTMCRF/model.pth',  # 模型路径
+        '--dropout-rate': '0.3',
         '--embed-size': '256',
         '--hidden-size': '256',
         '--batch-size': '32',
@@ -30,10 +30,10 @@ def get_args():
         '--lr': '1e-3',
         '--log-every': '10',
         '--max-patience': '2',
-        '--max-decay': '3',
+        '--max-decay': '4',
         '--lr-decay': '0.5',
-        '--model-save-path': './trained_model/transformer/model.pth',
-        '--optimizer-save-path': './trained_model/transformer/optimizer.pth',
+        '--model-save-path': './trained_model/BiLSTMCRF/model.pth',
+        '--optimizer-save-path': './trained_model/BiLSTMCRF/optimizer.pth',
         '--cuda': True
     }
     return args
