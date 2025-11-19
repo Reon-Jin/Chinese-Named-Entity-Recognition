@@ -1,1 +1,0 @@
-{"word2id": {"N": 0, "<START>": 1, "<END>": 2, "I-ORG": 3, "I-PER": 4, "I-LOC": 5, "B-LOC": 6, "B-PER": 7, "B-ORG": 8, "<PAD>": 9}, "id2word": ["N", "<START>", "<END>", "I-ORG", "I-PER", "I-LOC", "B-LOC", "B-PER", "B-ORG", "<PAD>"]}
