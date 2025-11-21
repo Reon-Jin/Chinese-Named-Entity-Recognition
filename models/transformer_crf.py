@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from vocab import Vocab
 import utils
 import math
@@ -29,37 +28,39 @@ class TransformerCRF(nn.Module):
         self.pos_encoding = PositionalEncoding(embed_size, dropout_rate)
         self.dropout = nn.Dropout(dropout_rate)
 
-        # 替换 LSTM 为 Transformer
+        # Replace LSTM with Transformer
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=embed_size,
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout_rate,
-            batch_first=True  # 输入形状为 (batch, seq_len, features)
+            batch_first=True  # input shape: (batch, seq_len, features)
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         self.hidden2emit_score = nn.Linear(embed_size, len(self.tag_vocab))
+        # transition[k, j] is the score of transitioning from tag k -> tag j
         self.transition = nn.Parameter(torch.randn(len(self.tag_vocab), len(self.tag_vocab)))  # shape: (K, K)
 
     def forward(self, sentences, tags, sen_lengths):
         """
         Args:
-            sentences (tensor): sentences, shape (b, len). Lengths are in decreasing order, len is the length
-                                of the longest sentence
+            sentences (tensor): sentences, shape (b, len)
             tags (tensor): corresponding tags, shape (b, len)
             sen_lengths (list): sentence lengths
         Returns:
             loss (tensor): loss on the batch, shape (b,)
         """
+        # mask: True for real tokens, False for PAD
         mask = (sentences != self.sent_vocab[self.sent_vocab.PAD]).to(self.device)  # shape: (b, len)
 
-        # 生成 Transformer 需要的 padding mask
-        src_key_padding_mask = ~mask  # Transformer 中 True 表示需要被mask的位置
+        # Transformer expects src_key_padding_mask with True in positions that should be masked (i.e., PAD positions)
+        src_key_padding_mask = ~mask  # True where PAD
 
-        # 嵌入层和位置编码
+        # embedding + positional encoding
         embeddings = self.embedding(sentences)  # shape: (b, len, e)
-        embeddings = self.pos_encoding(embeddings.transpose(0, 1)).transpose(0, 1)  # 添加位置编码
+        # pos_encoding expects (seq_len, batch, d_model)
+        embeddings = self.pos_encoding(embeddings.transpose(0, 1)).transpose(0, 1)  # back to (b, len, e)
 
         emit_score = self.encode(embeddings, src_key_padding_mask)  # shape: (b, len, K)
         loss = self.cal_loss(tags, mask, emit_score)  # shape: (b,)
@@ -82,47 +83,71 @@ class TransformerCRF(nn.Module):
 
     def predict(self, sentences, sen_lengths):
         """
+        Viterbi decode per sentence.
+
         Args:
-            sentences (tensor): sentences, shape (b, len). Lengths are in decreasing order, len is the length
-                                of the longest sentence
-            sen_lengths (list): sentence lengths
+            sentences (tensor): shape (b, len)
+            sen_lengths (list or tensor): lengths for each sentence in the batch
         Returns:
-            tags (list[list[str]]): predicted tags for the batch
+            tags (list[list[int]]): predicted tag ids (one list per sentence)
         """
+        device = self.device
         batch_size = sentences.shape[0]
-        mask = (sentences != self.sent_vocab[self.sent_vocab.PAD])  # shape: (b, len)
+        mask = (sentences != self.sent_vocab[self.sent_vocab.PAD]).to(device)  # (b, len)
         src_key_padding_mask = ~mask
 
-        # 嵌入层和位置编码
-        embeddings = self.embedding(sentences)  # shape: (b, len, e)
-        embeddings = self.pos_encoding(embeddings.transpose(0, 1)).transpose(0, 1)  # 添加位置编码
+        embeddings = self.embedding(sentences)  # (b, len, e)
+        embeddings = self.pos_encoding(embeddings.transpose(0, 1)).transpose(0, 1)
+        emit_score = self.encode(embeddings, src_key_padding_mask)  # (b, len, K)
 
-        emit_score = self.encode(embeddings, src_key_padding_mask)  # shape: (b, len, K)
+        K = len(self.tag_vocab)
+        emit_score = emit_score.to(device)
 
-        # 以下与原始代码相同
-        tags = [[[i] for i in range(len(self.tag_vocab))]] * batch_size  # list, shape: (b, K, 1)
-        d = torch.unsqueeze(emit_score[:, 0], dim=1)  # shape: (b, 1, K)
-        for i in range(1, sen_lengths[0]):
-            n_unfinished = mask[:, i].sum()
-            d_uf = d[: n_unfinished]  # shape: (uf, 1, K)
-            emit_and_transition = self.transition + emit_score[: n_unfinished, i].unsqueeze(dim=1)  # shape: (uf, K, K)
-            new_d_uf = d_uf.transpose(1, 2) + emit_and_transition  # shape: (uf, K, K)
-            d_uf, max_idx = torch.max(new_d_uf, dim=1)
-            max_idx = max_idx.tolist()  # list, shape: (nf, K)
-            tags[: n_unfinished] = [[tags[b][k] + [j] for j, k in enumerate(max_idx[b])] for b in range(n_unfinished)]
-            d = torch.cat((torch.unsqueeze(d_uf, dim=1), d[n_unfinished:]), dim=0)  # shape: (b, 1, K)
-        d = d.squeeze(dim=1)  # shape: (b, K)
-        _, max_idx = torch.max(d, dim=1)  # shape: (b,)
-        max_idx = max_idx.tolist()
-        tags = [tags[b][k] for b, k in enumerate(max_idx)]
-        return tags
+        # Ensure sen_lengths is a list of ints
+        if isinstance(sen_lengths, torch.Tensor):
+            sen_lengths = sen_lengths.cpu().tolist()
+        sen_lengths = [int(x) for x in sen_lengths]
+
+        results = []
+        # Do Viterbi per-sentence (safer and simpler)
+        for b in range(batch_size):
+            L = sen_lengths[b]
+            if L == 0:
+                results.append([])
+                continue
+            # scores for time 0
+            scores = emit_score[b, 0].detach().clone()  # (K,)
+            backpointers = []  # list of tensors of shape (K,) storing argmax prev tag for each current tag
+
+            for t in range(1, L):
+                emit_t = emit_score[b, t]  # (K,)
+                # scores.unsqueeze(1): (K,1), transition: (K,K) where transition[k,j]
+                # all_scores[k, j] = scores[k] + transition[k, j]
+                all_scores = scores.unsqueeze(1) + self.transition  # (K, K)
+                # For each current tag j we need max over previous k
+                max_scores, argmax_prev = all_scores.max(dim=0)  # both (K,)
+                # update scores for current time t
+                scores = max_scores + emit_t  # (K,)
+                backpointers.append(argmax_prev.detach().cpu())  # store on CPU for easy indexing later
+
+            # backtrace
+            last_tag = int(torch.argmax(scores).item())
+            path = [last_tag]
+            # iterate backpointers in reverse
+            for bp in reversed(backpointers):
+                last_tag = int(bp[last_tag].item())
+                path.append(last_tag)
+            path.reverse()  # now path length == L
+            results.append(path)
+
+        return results
 
     # cal_loss 方法保持不变
     def cal_loss(self, tags, mask, emit_score):
         """ Calculate CRF loss
         Args:
             tags (tensor): a batch of tags, shape (b, len)
-            mask (tensor): mask for the tags, shape (b, len), values in PAD position is 0
+            mask (tensor): mask for the tags, shape (b, len), values in PAD position is 0 (bool tensor)
             emit_score (tensor): emit matrix, shape (b, len, K)
         Returns:
             loss (tensor): loss of the batch, shape (b,)
@@ -132,10 +157,12 @@ class TransformerCRF(nn.Module):
         score = torch.gather(emit_score, dim=2, index=tags.unsqueeze(dim=2)).squeeze(dim=2)  # shape: (b, len)
         score[:, 1:] += self.transition[tags[:, :-1], tags[:, 1:]]
         total_score = (score * mask.type(torch.float)).sum(dim=1)  # shape: (b,)
-        # calculate the scaling factor
+        # calculate the scaling factor (log-sum-exp over all tag sequences)
         d = torch.unsqueeze(emit_score[:, 0], dim=1)  # shape: (b, 1, K)
         for i in range(1, sent_len):
-            n_unfinished = mask[:, i].sum()
+            n_unfinished = int(mask[:, i].sum().item())
+            if n_unfinished == 0:
+                break
             d_uf = d[: n_unfinished]  # shape: (uf, 1, K)
             emit_and_transition = emit_score[: n_unfinished, i].unsqueeze(dim=1) + self.transition  # shape: (uf, K, K)
             log_sum = d_uf.transpose(1, 2) + emit_and_transition  # shape: (uf, K, K)
@@ -191,10 +218,11 @@ class PositionalEncoding(nn.Module):
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
+        pe = pe.unsqueeze(0).transpose(0, 1)  # shape: (max_len, 1, d_model)
         self.register_buffer('pe', pe)
 
     def forward(self, x):
+        # x expected shape: (seq_len, batch, d_model)
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
 
