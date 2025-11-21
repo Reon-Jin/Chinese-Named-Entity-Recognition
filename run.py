@@ -20,8 +20,8 @@ def get_args():
         'RESULT': './result.txt',  # 结果保存路径
         'SENT_VOCAB': './vocab/sent_vocab.json',  # 句子词典路径
         'TAG_VOCAB': './vocab/tag_vocab.json',  # 标签词典路径
-        'MODEL': './trained_model/model.pth',  # 模型路径
-        '--dropout-rate': '0.5',
+        'MODEL': './trained_model/T/model.pth',  # 模型路径
+        '--dropout-rate': '0.3',
         '--embed-size': '256',
         '--hidden-size': '256',
         '--batch-size': '32',
@@ -30,11 +30,13 @@ def get_args():
         '--lr': '1e-3',
         '--log-every': '10',
         '--max-patience': '2',
-        '--max-decay': '3',
+        '--max-decay': '4',
         '--lr-decay': '0.5',
-        '--model-save-path': './trained_model/transformer/model.pth',
-        '--optimizer-save-path': './trained_model/transformer/optimizer.pth',
-        '--cuda': True
+        '--model-save-path': './trained_model/T/model.pth',
+        '--optimizer-save-path': './trained_model/T/optimizer.pth',
+        '--cuda': True,
+        '--debug-train': False,              # 是否在训练时打印预测（默认 True）
+        '--debug-train-samples': '2'  
     }
     return args
 
@@ -56,14 +58,15 @@ def train(args):
     device = torch.device('cuda' if args['--cuda'] else 'cpu')
     patience, decay_num = 0, 0
 
-    model = BiLSTMCRF(sent_vocab, tag_vocab, float(args['--dropout-rate']), int(args['--embed-size']),int(args['--hidden-size'])).to(device)
-    #model = TransformerCRF(sent_vocab, tag_vocab, float(args['--dropout-rate']), int(args['--embed-size']),int(args['--hidden-size'])).to(device)
+    #model = BiLSTMCRF(sent_vocab, tag_vocab, float(args['--dropout-rate']), int(args['--embed-size']),int(args['--hidden-size'])).to(device)
+    model = TransformerCRF.load(args['MODEL'], device)
+    '''
     for name, param in model.named_parameters():
         if 'weight' in name:
             nn.init.normal_(param.data, 0, 0.01)
         else:
             nn.init.constant_(param.data, 0)
-
+    '''
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(args['--lr']))
 
     print('start training...')
@@ -74,6 +77,9 @@ def train(args):
         'dev_loss': [],
         'learning_rate': []
     }
+
+    debug_train = bool(args['--debug-train'])
+    debug_train_samples = int(args['--debug-train-samples'])
 
     for epoch in range(max_epoch):
         # 训练阶段 - 使用更详细的进度条
@@ -96,27 +102,71 @@ def train(args):
 
         batch_start_time = time.time()
 
-        for batch_idx, (sentences, tags) in enumerate(pbar):
-            current_batch_size = len(sentences)
+        for batch_idx, (raw_sentences, raw_tags) in enumerate(pbar):
+            current_batch_size = len(raw_sentences)
 
-            sentences, sent_lengths = utils.pad(sentences, sent_vocab[sent_vocab.PAD], device)
-            tags, _ = utils.pad(tags, tag_vocab[tag_vocab.PAD], device)
+            # pad inputs and tags (padded tensors on device)
+            padded_sentences, sent_lengths = utils.pad(raw_sentences, sent_vocab[sent_vocab.PAD], device)
+            padded_tags, _ = utils.pad(raw_tags, tag_vocab[tag_vocab.PAD], device)
 
             # back propagation
             optimizer.zero_grad()
-            batch_loss = model(sentences, tags, sent_lengths)
+            batch_loss = model(padded_sentences, padded_tags, sent_lengths)
             loss = batch_loss.mean()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(args['--clip_max_norm']))
             optimizer.step()
-
 
             batch_loss_value = batch_loss.mean().item()
             epoch_loss += batch_loss.sum().item()
             total_samples += current_batch_size
             total_batches += 1
 
-            del sentences, tags, sent_lengths, batch_loss, loss
+            # ======== 新增：训练时按 batch 打印若干样本的预测信息（受 debug 控制） ========
+            if debug_train:
+                # 在训练中临时切换到 eval 模式进行预测，然后恢复 train
+                model.eval()
+                with torch.no_grad():
+                    try:
+                        predicted_tags = model.predict(padded_sentences, sent_lengths)
+                    except Exception as e:
+                        predicted_tags = [[] for _ in range(current_batch_size)]
+                        print(f"[WARN] model.predict failed during training debug: {e}")
+
+                    n_print = min(debug_train_samples, current_batch_size)
+                    for i in range(n_print):
+                        # raw_sentences[i], raw_tags[i] 是原始 index 列表（含首尾标记），predicted_tags[i] 是对应的 id 列表
+                        sent_ids = raw_sentences[i]
+                        true_ids = raw_tags[i]
+                        pred_ids = predicted_tags[i] if i < len(predicted_tags) else []
+
+                        # 去掉首尾（跟测试脚本保持一致）
+                        sent_ids_trim = sent_ids[1:-1]
+                        true_ids_trim = true_ids[1:-1]
+                        # predicted 可能长度和 true 不完全一样，尽量对齐
+                        if len(pred_ids) >= 2:
+                            pred_ids_trim = pred_ids[1:-1]
+                        else:
+                            pred_ids_trim = pred_ids
+
+                        sent_words = [sent_vocab.id2word(x) for x in sent_ids_trim]
+                        true_tags_words = [tag_vocab.id2word(x) for x in true_ids_trim]
+                        pred_tags_words = [tag_vocab.id2word(x) for x in pred_ids_trim]
+
+                        gold_entities = extract_entities(true_tags_words)
+                        pred_entities = extract_entities(pred_tags_words)
+
+                        print(f"[Train Debug] Epoch {epoch+1} Batch {batch_idx} Loss:{batch_loss_value:.4f} Sample:{i}")
+                        print(" Sentence: ", " ".join(sent_words))
+                        print(" True tags:", " ".join(true_tags_words))
+                        print(" Pred tags:", " ".join(pred_tags_words))
+                        print(" Gold entities:", gold_entities)
+                        print(" Pred entities:", pred_entities)
+                        print("-" * 40)
+                model.train()
+            # =====================================================================
+
+            del padded_sentences, padded_tags, sent_lengths, batch_loss, loss
             torch.cuda.empty_cache() if args['--cuda'] else None
             gc.collect()
             # 计算处理速度
@@ -203,7 +253,6 @@ def train(args):
     print(f'📈 最终验证损失: {min_dev_loss:.4f}')
     print(f'🔄 总学习率衰减次数: {decay_num}')
 
-
 def extract_entities(tag_seq):
     """
     将BIO标签序列转为实体 span 列表
@@ -250,9 +299,9 @@ def tst(args):
     print('num of test samples: %d' % (len(test_data)))
 
     device = torch.device('cuda' if args['--cuda'] else 'cpu')
-    model = BiLSTMCRF.load(args['MODEL'], device)
+    #model = BiLSTMCRF.load(args['MODEL'], device)
 
-    #model = TransformerCRF.load(args['MODEL'], device)
+    model = TransformerCRF.load(args['MODEL'], device)
 
     print('start testing...')
 
@@ -305,6 +354,20 @@ def tst(args):
 
                 gold_entities = extract_entities(true_text)
                 pred_entities = extract_entities(pred_text)
+
+                # -------------- 新增：在控制台打印每个样本的详细信息 --------------
+                # 打印句子、真实标签、预测标签、实体列表
+                sent_words = [sent_vocab.id2word(x) for x in sent]
+                true_tags_words = [tag_vocab.id2word(x) for x in true_tags]
+                pred_tags_words = [tag_vocab.id2word(x) for x in pred_tags]
+
+                #print("Sentence: ", " ".join(sent_words))
+                #print("True tags:", " ".join(true_tags_words))
+                #print("Pred tags:", " ".join(pred_tags_words))
+                #print("Gold entities:", gold_entities)
+                #print("Pred entities:", pred_entities)
+                #print("-" * 40)
+                # -----------------------------------------------------------------
 
                 total_gold += len(gold_entities)
                 total_pred += len(pred_entities)
