@@ -13,8 +13,8 @@ import gc
 def get_args():
     """创建并返回参数字典，模拟命令行参数"""
     args = {
-        'train': True,  # 设置为True表示训练模式
-        'test': False,  # 设置为False
+        'train': False,  # 设置为True表示训练模式
+        'test': True,  # 设置为False
         'TRAIN': './data/NER-train-utf8.txt',  # 训练数据路径
         'TEST': './data/NER-test-utf8.txt',  # 测试数据路径
         'RESULT': './result.txt',  # 结果保存路径
