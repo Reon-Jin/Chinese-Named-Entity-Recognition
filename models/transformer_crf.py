@@ -6,8 +6,8 @@ import utils
 import math
 
 class TransformerCRF(nn.Module):
-    def __init__(self, sent_vocab, tag_vocab, dropout_rate=0.5, embed_size=256, hidden_size=256,
-                 nhead=8, num_layers=6, dim_feedforward=2048):
+    def __init__(self, sent_vocab, tag_vocab, dropout_rate=0.5, embed_size=768, hidden_size=768,
+                 nhead=8, num_layers=12, dim_feedforward=3072):
         """ Initialize the model
         Args:
             sent_vocab (Vocab): vocabulary of words

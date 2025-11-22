@@ -8,6 +8,7 @@ import utils
 import random
 from tqdm import tqdm
 from models.transformer_crf import TransformerCRF
+from models.crf import CRF
 import gc
 
 def get_args():
@@ -20,11 +21,11 @@ def get_args():
         'RESULT': './result.txt',  # 结果保存路径
         'SENT_VOCAB': './vocab/sent_vocab.json',  # 句子词典路径
         'TAG_VOCAB': './vocab/tag_vocab.json',  # 标签词典路径
-        'MODEL': './trained_model/T/model.pth',  # 模型路径
+        'MODEL': './trained_model/CRF/model.pth',  # 模型路径
         '--dropout-rate': '0.3',
         '--embed-size': '256',
         '--hidden-size': '256',
-        '--batch-size': '32',
+        '--batch-size': '256',
         '--max-epoch': '100',
         '--clip_max_norm': '5.0',
         '--lr': '1e-3',
@@ -32,8 +33,8 @@ def get_args():
         '--max-patience': '2',
         '--max-decay': '4',
         '--lr-decay': '0.5',
-        '--model-save-path': './trained_model/T/model.pth',
-        '--optimizer-save-path': './trained_model/T/optimizer.pth',
+        '--model-save-path': './trained_model/CRF/model.pth',
+        '--optimizer-save-path': './trained_model/CRF/optimizer.pth',
         '--cuda': True,
         '--debug-train': False,              # 是否在训练时打印预测（默认 True）
         '--debug-train-samples': '2'  
@@ -59,7 +60,9 @@ def train(args):
     patience, decay_num = 0, 0
 
     #model = BiLSTMCRF(sent_vocab, tag_vocab, float(args['--dropout-rate']), int(args['--embed-size']),int(args['--hidden-size'])).to(device)
-    model = TransformerCRF.load(args['MODEL'], device)
+    #model = TransformerCRF.load(args['MODEL'], device)
+    #model = TransformerCRF(sent_vocab, tag_vocab).to(device)
+    model = CRF(sent_vocab,tag_vocab).to(device)
     '''
     for name, param in model.named_parameters():
         if 'weight' in name:
@@ -301,8 +304,9 @@ def tst(args):
     device = torch.device('cuda' if args['--cuda'] else 'cpu')
     #model = BiLSTMCRF.load(args['MODEL'], device)
 
-    model = TransformerCRF.load(args['MODEL'], device)
+    #model = TransformerCRF.load(args['MODEL'], device)
 
+    model = CRF.load(args['MODEL'], device)
     print('start testing...')
 
     result_file = open(args['RESULT'], 'w')
@@ -357,9 +361,9 @@ def tst(args):
 
                 # -------------- 新增：在控制台打印每个样本的详细信息 --------------
                 # 打印句子、真实标签、预测标签、实体列表
-                sent_words = [sent_vocab.id2word(x) for x in sent]
-                true_tags_words = [tag_vocab.id2word(x) for x in true_tags]
-                pred_tags_words = [tag_vocab.id2word(x) for x in pred_tags]
+                # sent_words = [sent_vocab.id2word(x) for x in sent]
+                # true_tags_words = [tag_vocab.id2word(x) for x in true_tags]
+                # pred_tags_words = [tag_vocab.id2word(x) for x in pred_tags]
 
                 #print("Sentence: ", " ".join(sent_words))
                 #print("True tags:", " ".join(true_tags_words))

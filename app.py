@@ -4,6 +4,7 @@ from vocab import Vocab
 import torch
 import utils
 from models.bilstm_crf import BiLSTMCRF
+from models.transformer_crf import TransformerCRF
 from datetime import datetime
 import re
 
@@ -14,7 +15,7 @@ CORS(app)
 class Config:
     SENT_VOCAB = './vocab/sent_vocab.json'
     TAG_VOCAB = './vocab/tag_vocab.json'
-    MODEL = './trained_model/BiLSTMCRF/model.pth'
+    MODEL = './trained_model/BiLSTMCRF/model_best.pth'
     CUDA = False  # 根据你的环境调整
     BATCH_SIZE = 32
 
@@ -34,6 +35,9 @@ def init_components():
 
             device = torch.device('cuda' if config.CUDA else 'cpu')
             _model = BiLSTMCRF.load(config.MODEL, device)
+
+            #_model = TransformerCRF.load(config.MODEL, device)
+
             _model.eval()
             _device = device
             print("模型和词汇表加载成功!")
