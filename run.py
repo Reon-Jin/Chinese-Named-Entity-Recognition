@@ -8,6 +8,7 @@ import utils
 import random
 from tqdm import tqdm
 from models.transformer_crf import TransformerCRF
+from models.gru_crf import GRUCRF
 from models.crf import CRF
 import gc
 
@@ -30,11 +31,11 @@ def get_args():
         '--clip_max_norm': '5.0',
         '--lr': '1e-3',
         '--log-every': '10',
-        '--max-patience': '2',
+        '--max-patience': '1',
         '--max-decay': '4',
         '--lr-decay': '0.5',
-        '--model-save-path': './trained_model/CRF/model.pth',
-        '--optimizer-save-path': './trained_model/CRF/optimizer.pth',
+        '--model-save-path': './trained_model/GRU/model.pth',
+        '--optimizer-save-path': './trained_model/GRU/optimizer.pth',
         '--cuda': True,
         '--debug-train': False,              # 是否在训练时打印预测（默认 True）
         '--debug-train-samples': '2'  
@@ -62,7 +63,8 @@ def train(args):
     #model = BiLSTMCRF(sent_vocab, tag_vocab, float(args['--dropout-rate']), int(args['--embed-size']),int(args['--hidden-size'])).to(device)
     #model = TransformerCRF.load(args['MODEL'], device)
     #model = TransformerCRF(sent_vocab, tag_vocab).to(device)
-    model = CRF(sent_vocab,tag_vocab).to(device)
+    model = GRUCRF(sent_vocab, tag_vocab).to(device)
+    #model = CRF(sent_vocab,tag_vocab).to(device)
     '''
     for name, param in model.named_parameters():
         if 'weight' in name:
@@ -228,8 +230,9 @@ def train(args):
                 # 加载之前保存的最佳模型
                 print('🔄 加载最佳模型并衰减学习率...')
 
-                model = BiLSTMCRF.load(model_save_path, device)
+                #model = BiLSTMCRF.load(model_save_path, device)
                 #model = TransformerCRF.load(model_save_path,device)
+                model = GRUCRF.load(model_save_path,device)
 
                 optimizer.load_state_dict(torch.load(optimizer_save_path))
                 for param_group in optimizer.param_groups:
@@ -312,7 +315,8 @@ def tst(args):
     # ===== 设备与模型加载 =====
     device = torch.device('cuda' if args['--cuda'] else 'cpu')
     #model = BiLSTMCRF.load(args['MODEL'], device)
-    # model = TransformerCRF.load(args['MODEL'], device)
+    #model = TransformerCRF.load(args['MODEL'], device)
+    #model = GRUCRF.load(args['MODEL'], device)
     model = CRF.load(args['MODEL'], device)
     print('start testing...')
 
