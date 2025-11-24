@@ -21,7 +21,7 @@ def get_args():
         'RESULT': './result.txt',  # 结果保存路径
         'SENT_VOCAB': './vocab/sent_vocab.json',  # 句子词典路径
         'TAG_VOCAB': './vocab/tag_vocab.json',  # 标签词典路径
-        'MODEL': './trained_model/CRF/model.pth',  # 模型路径
+        'MODEL': './trained_model/BiLSTMCRF/model_best.pth',  # 模型路径
         '--dropout-rate': '0.3',
         '--embed-size': '256',
         '--hidden-size': '256',
@@ -302,11 +302,11 @@ def tst(args):
     print('num of test samples: %d' % (len(test_data)))
 
     device = torch.device('cuda' if args['--cuda'] else 'cpu')
-    #model = BiLSTMCRF.load(args['MODEL'], device)
+    model = BiLSTMCRF.load(args['MODEL'], device)
 
     #model = TransformerCRF.load(args['MODEL'], device)
 
-    model = CRF.load(args['MODEL'], device)
+    #model = CRF.load(args['MODEL'], device)
     print('start testing...')
 
     result_file = open(args['RESULT'], 'w')

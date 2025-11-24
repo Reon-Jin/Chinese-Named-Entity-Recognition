@@ -2,3 +2,5 @@ __pycache__/
 .idea/
 papers/
 trained_model/
+result.txt
+run.py
