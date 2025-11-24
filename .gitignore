@@ -4,3 +4,4 @@ papers/
 trained_model/
 result.txt
 run.py
+*.txt

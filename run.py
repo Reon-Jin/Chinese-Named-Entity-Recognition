@@ -21,7 +21,7 @@ def get_args():
         'RESULT': './result.txt',  # 结果保存路径
         'SENT_VOCAB': './vocab/sent_vocab.json',  # 句子词典路径
         'TAG_VOCAB': './vocab/tag_vocab.json',  # 标签词典路径
-        'MODEL': './trained_model/BiLSTMCRF/model_best.pth',  # 模型路径
+        'MODEL': './trained_model/CRF/model.pth',  # 模型路径
         '--dropout-rate': '0.3',
         '--embed-size': '256',
         '--hidden-size': '256',
@@ -290,26 +290,33 @@ def extract_entities(tag_seq):
 
 
 def tst(args):
-    """ Testing the model with P/R/F1 + 每类实体的P/R/F1 """
+    """ Testing the model with P/R/F1 + 每类实体的P/R/F1，并在 result.txt 中保持与原始测试集相同的句子顺序 """
 
+    # ===== 载入词表 =====
     sent_vocab = Vocab.load(args['SENT_VOCAB'])
     tag_vocab = Vocab.load(args['TAG_VOCAB'])
 
+    # ===== 读取测试集 =====
     sentences, tags = utils.read_corpus(args['TEST'])
     sentences = utils.words2indices(sentences, sent_vocab)
     tags = utils.words2indices(tags, tag_vocab)
+
+    print('num of test samples: %d' % (len(sentences)))
+
+    # 建立 “句子对象 -> 原始下标” 映射
+    sent_to_index = {id(s): i for i, s in enumerate(sentences)}
+
+    # batch_iter 需要的数据结构仍然是 (sent, tag)，不改它
     test_data = list(zip(sentences, tags))
-    print('num of test samples: %d' % (len(test_data)))
 
+    # ===== 设备与模型加载 =====
     device = torch.device('cuda' if args['--cuda'] else 'cpu')
-    model = BiLSTMCRF.load(args['MODEL'], device)
-
-    #model = TransformerCRF.load(args['MODEL'], device)
-
-    #model = CRF.load(args['MODEL'], device)
+    #model = BiLSTMCRF.load(args['MODEL'], device)
+    # model = TransformerCRF.load(args['MODEL'], device)
+    model = CRF.load(args['MODEL'], device)
     print('start testing...')
 
-    result_file = open(args['RESULT'], 'w')
+    result_file = open(args['RESULT'], 'w', encoding='utf-8')
     model.eval()
 
     # ==== 总指标 ====
@@ -325,58 +332,50 @@ def tst(args):
 
     total_batches = len(test_data) // int(args['--batch-size']) + 1
 
+    # 保存所有样本的 (原始下标, sent, true_tags, pred_tags)
+    all_results = []
+
+    # ===== 推理 =====
     with torch.no_grad():
-        test_iterator = utils.batch_iter(test_data, batch_size=int(args['--batch-size']), shuffle=False)
+        test_iterator = utils.batch_iter(
+            test_data,
+            batch_size=int(args['--batch-size']),
+            shuffle=False
+        )
 
-        for sentences, tags in tqdm(test_iterator, desc="🧪 测试中",
-                                    total=total_batches, unit='batch'):
+        for sent_batch, tag_batch in tqdm(test_iterator,
+                                          desc="🧪 测试中",
+                                          total=total_batches,
+                                          unit='batch'):
 
-            padded_sentences, sent_lengths = utils.pad(sentences, sent_vocab[sent_vocab.PAD], device)
+            padded_sentences, sent_lengths = utils.pad(
+                sent_batch,
+                sent_vocab[sent_vocab.PAD],
+                device
+            )
 
             predicted_tags = model.predict(padded_sentences, sent_lengths)
 
-            for sent, true_tags, pred_tags in zip(sentences, tags, predicted_tags):
+            # 注意：这里的 sent 是原始对象的引用，可以用 id(sent) 找回原始 index
+            for sent, true_tags, pred_tags in zip(sent_batch, tag_batch, predicted_tags):
+                idx = sent_to_index[id(sent)]
+                all_results.append((idx, sent, true_tags, pred_tags))
 
-                sent = sent[1:-1]
-                true_tags = true_tags[1:-1]
-                pred_tags = pred_tags[1:-1]
+                # ===== 在这里顺便统计指标（顺序无关） =====
+                # 去掉句首句尾的 <bos>/<eos> 等特殊符号
+                true_core = true_tags[1:-1]
+                pred_core = pred_tags[1:-1]
 
-                # 写 result.txt
-                for tok, t, p in zip(sent, true_tags, pred_tags):
-                    result_file.write(f"{sent_vocab.id2word(tok)} "
-                                      f"{tag_vocab.id2word(t)} "
-                                      f"{tag_vocab.id2word(p)}\n")
-                result_file.write("\n")
-
-                # BIO 标签转文字
-                true_text = [tag_vocab.id2word(x) for x in true_tags]
-                pred_text = [tag_vocab.id2word(x) for x in pred_tags]
-
-                # N -> O
-                true_text = [t for t in true_text]
-                pred_text = [t for t in pred_text]
+                true_text = [tag_vocab.id2word(x) for x in true_core]
+                pred_text = [tag_vocab.id2word(x) for x in pred_core]
 
                 gold_entities = extract_entities(true_text)
                 pred_entities = extract_entities(pred_text)
 
-                # -------------- 新增：在控制台打印每个样本的详细信息 --------------
-                # 打印句子、真实标签、预测标签、实体列表
-                # sent_words = [sent_vocab.id2word(x) for x in sent]
-                # true_tags_words = [tag_vocab.id2word(x) for x in true_tags]
-                # pred_tags_words = [tag_vocab.id2word(x) for x in pred_tags]
-
-                #print("Sentence: ", " ".join(sent_words))
-                #print("True tags:", " ".join(true_tags_words))
-                #print("Pred tags:", " ".join(pred_tags_words))
-                #print("Gold entities:", gold_entities)
-                #print("Pred entities:", pred_entities)
-                #print("-" * 40)
-                # -----------------------------------------------------------------
-
                 total_gold += len(gold_entities)
                 total_pred += len(pred_entities)
 
-                # 按类型统计
+                # 按类型统计 gold / pred
                 for (s, e, t) in gold_entities:
                     if t in types:
                         gold_per_type[t] += 1
@@ -385,14 +384,33 @@ def tst(args):
                     if t in types:
                         pred_per_type[t] += 1
 
-                # 严格匹配
+                # 严格匹配统计 correct
                 for ent in pred_entities:
                     if ent in gold_entities:
                         total_correct += 1
                         if ent[2] in types:
                             correct_per_type[ent[2]] += 1
 
-    # ==== 总指标 ====
+    # ===== 恢复原始顺序并写入 result.txt =====
+    all_results.sort(key=lambda x: x[0])  # 按原始 index 排序
+
+    for _, sent, true_tags, pred_tags in all_results:
+        # 同样去掉首尾特殊 token
+        sent_core = sent[1:-1]
+        true_core = true_tags[1:-1]
+        pred_core = pred_tags[1:-1]
+
+        for tok, t, p in zip(sent_core, true_core, pred_core):
+            result_file.write(
+                f"{sent_vocab.id2word(tok)} "
+                f"{tag_vocab.id2word(t)} "
+                f"{tag_vocab.id2word(p)}\n"
+            )
+        result_file.write("\n")
+
+    result_file.close()
+
+    # ===== 打印总指标 =====
     precision = total_correct / total_pred if total_pred else 0
     recall = total_correct / total_gold if total_gold else 0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0
@@ -405,7 +423,7 @@ def tst(args):
     print(f"   Recall:    {recall:.4f}")
     print(f"   F1:        {f1:.4f}\n")
 
-    # ==== 输出每类实体的结果 ====
+    # ===== 每类实体指标 =====
     print("📌 Per-Entity-Type Results:")
     print(f"{'Type':<6} {'P':<8} {'R':<8} {'F1':<8} {'Gold':<6} {'Pred':<6} {'Correct'}")
     print("-" * 60)
@@ -422,6 +440,9 @@ def tst(args):
         print(f"{t:<6} {P:.4f}   {R:.4f}   {F:.4f}   {g:<6} {p:<6} {c}")
 
     print("\n✅ 测试完成！")
+
+
+
 
 
 
