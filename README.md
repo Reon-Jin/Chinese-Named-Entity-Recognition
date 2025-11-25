@@ -1,5 +1,5 @@
 ## Data
-创建一个./data文件夹用于存放数据集
+./data文件夹用于存放数据集
 
 ## Usage
 训练及测试:
@@ -9,7 +9,12 @@ python run.py
 训练时启用Train = True
 测试时启用Test = True
 
-
+## App
+启动系统软件：
+'''
+pyhton app.py
+'''
+注意需要先训练并保存模型权重文件后再启动
 ## Result
 测试结果示例：
 ```

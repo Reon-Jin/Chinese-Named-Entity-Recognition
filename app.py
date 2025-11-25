@@ -4,7 +4,6 @@ from vocab import Vocab
 import torch
 import utils
 from models.bilstm_crf import BiLSTMCRF
-from models.transformer_crf import TransformerCRF
 from datetime import datetime
 import re
 
@@ -15,7 +14,7 @@ CORS(app)
 class Config:
     SENT_VOCAB = './vocab/sent_vocab.json'
     TAG_VOCAB = './vocab/tag_vocab.json'
-    MODEL = './trained_model/BiLSTMCRF/model_best.pth'
+    MODEL = './trained_model/BiLSTMCRF/model.pth'
     CUDA = False  # 根据你的环境调整
     BATCH_SIZE = 32
 
